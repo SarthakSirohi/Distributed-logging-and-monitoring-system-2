@@ -1,0 +1,104 @@
+services:
+  mongodb:
+    image: mongo:8
+    restart: unless-stopped
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  logging-server:
+    build:
+      context: .
+      dockerfile: logging_server/server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      MONGODB_URI: mongodb://mongodb:27017/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  log-creator-1:
+    build:
+      context: .
+      dockerfile: log_creator/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      SERVICE_NAME: log_creator_3001
+      PEER_URL: http://log-creator-2:3002
+      LOG_SERVER_URL: http://logging-server:8000
+    depends_on:
+      logging-server:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  log-creator-2:
+    build:
+      context: .
+      dockerfile: log_creator/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: "3002"
+      SERVICE_NAME: log_creator_3002
+      PEER_URL: http://log-creator-1:3001
+      LOG_SERVER_URL: http://logging-server:8000
+    depends_on:
+      logging-server:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["loadtest"]
+    command: ["run", "/scripts/load-test.js"]
+    volumes:
+      - ./k6:/scripts:ro
+    environment:
+      BASE_URL: http://log-creator-1:3001
+    depends_on:
+      log-creator-1:
+        condition: service_healthy
+      log-creator-2:
+        condition: service_healthy
+
+volumes:
+  mongodb_data:

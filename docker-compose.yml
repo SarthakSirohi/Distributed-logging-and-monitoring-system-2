@@ -5,10 +5,57 @@ services:
     volumes:
       - mongodb_data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "db.adminCommand('ping').ok"
       interval: 5s
       timeout: 5s
       retries: 10
+
+  kafka:
+    image: apache/kafka:4.1.1
+    restart: unless-stopped
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # Creates the Kafka topic before the producer and consumer start.
+  kafka-init:
+    build:
+      context: .
+      dockerfile: logging_server/server/Dockerfile
+    command: ["node", "kafka-init.js"]
+    restart: "no"
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: logs
+    depends_on:
+      kafka:
+        condition: service_healthy
 
   logging-server:
     build:
@@ -34,6 +81,24 @@ services:
       retries: 10
       start_period: 10s
 
+  # Reads Kafka events and saves them to MongoDB.
+  log-consumer:
+    build:
+      context: .
+      dockerfile: logging_server/server/Dockerfile
+    command: ["node", "consumer.js"]
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/logs
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: logs
+      KAFKA_GROUP_ID: logging-system-consumer-group
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
   log-creator-1:
     build:
       context: .
@@ -45,10 +110,11 @@ services:
       PORT: "3001"
       SERVICE_NAME: log_creator_3001
       PEER_URL: http://log-creator-2:3002
-      LOG_SERVER_URL: http://logging-server:8000
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: logs
     depends_on:
-      logging-server:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -58,7 +124,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 5s
+      start_period: 10s
 
   log-creator-2:
     build:
@@ -71,10 +137,11 @@ services:
       PORT: "3002"
       SERVICE_NAME: log_creator_3002
       PEER_URL: http://log-creator-1:3001
-      LOG_SERVER_URL: http://logging-server:8000
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPIC: logs
     depends_on:
-      logging-server:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -84,7 +151,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 5s
+      start_period: 10s
 
   k6:
     image: grafana/k6:0.54.0
@@ -102,3 +169,4 @@ services:
 
 volumes:
   mongodb_data:
+  kafka_data:

@@ -19,61 +19,6 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// Receive and store logs
-app.post("/logs", async (req, res) => {
-  try {
-    const {
-      message,
-      level,
-      machine_id,
-      request_id,
-      timestamp,
-    } = req.body;
-
-    // Validate required fields
-    if (
-      !message ||
-      !level ||
-      !machine_id ||
-      !request_id ||
-      !timestamp
-    ) {
-      return res.status(400).json({
-        error:
-          "message, level, machine_id, request_id, and timestamp are required",
-      });
-    }
-
-    // Validate log level before saving to MongoDB
-    const validLevels = ["DEBUG", "INFO", "WARN", "ERROR"];
-
-    if (!validLevels.includes(level)) {
-      return res.status(400).json({
-        error: "Invalid log level",
-      });
-    }
-
-    // Save log to MongoDB
-    const log = await Log.create({
-      message,
-      level,
-      machine_id,
-      request_id,
-      timestamp,
-    });
-
-    return res.status(201).json({
-      message: "Log saved successfully",
-      log,
-    });
-  } catch (error) {
-    console.error("Failed to save log:", error.message);
-
-    return res.status(500).json({
-      error: "Failed to save log",
-    });
-  }
-});
 
 // Retrieve, filter, search, and paginate logs
 app.get("/logs", async (req, res) => {
